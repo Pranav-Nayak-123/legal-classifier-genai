@@ -1,0 +1,11 @@
+flask==3.0.3
+numpy==1.26.4
+pandas==2.2.2
+scikit-learn==1.5.1
+torch==2.3.1
+tqdm==4.66.4
+transformers==4.43.3
+datasets==2.20.0
+pypdf==4.3.1
+python-docx==1.1.2
+sentence-transformers==3.0.1

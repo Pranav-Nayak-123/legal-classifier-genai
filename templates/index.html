@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Legal Document Classifier</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <div class="bg-shape shape-1"></div>
+  <div class="bg-shape shape-2"></div>
+
+  <main class="container">
+    <section class="card hero">
+      <h1>Legal Document Classifier</h1>
+      <p>Paste legal text and predict its document category using a deep learning model.</p>
+      <p><strong>Active model:</strong> {{ model_type }}</p>
+    </section>
+
+    <section class="card form-card">
+      <form method="post" enctype="multipart/form-data">
+        <label for="document_file">Upload File (PDF, DOCX, TXT)</label>
+        <input id="document_file" name="document_file" type="file" accept=".pdf,.docx,.txt">
+        {% if uploaded_filename %}
+        <p><strong>Uploaded:</strong> {{ uploaded_filename }}</p>
+        {% endif %}
+
+        <label for="document_text">Document Text</label>
+        <textarea
+          id="document_text"
+          name="document_text"
+          rows="12"
+          placeholder="Paste legal text here..."
+        >{{ input_text }}</textarea>
+        <button type="submit" name="action" value="classify">Classify Document</button>
+      </form>
+    </section>
+
+    <section class="card form-card">
+      <h2>Ask Questions About Current Document</h2>
+      <form method="post">
+        <label for="question_text">Question</label>
+        <textarea
+          id="question_text"
+          name="question_text"
+          rows="3"
+          placeholder="Example: What are the termination conditions?"
+        >{{ question_text }}</textarea>
+        <button type="submit" name="action" value="ask">Ask Question</button>
+      </form>
+    </section>
+
+    {% if load_error %}
+    <section class="card error-card">
+      <h2>Model Not Ready</h2>
+      <p>{{ load_error }}</p>
+      <p>Run either:</p>
+      <p><code>python -m src.legal_classifier.train_transformer --data_path data/raw/legal_scotus.csv</code></p>
+      <p>or <code>python -m src.legal_classifier.train</code></p>
+    </section>
+    {% endif %}
+
+    {% if result %}
+      {% if result.error %}
+      <section class="card error-card">
+        <h2>Error</h2>
+        <p>{{ result.error }}</p>
+      </section>
+      {% else %}
+      <section class="card result-card">
+        <h2>Prediction Result</h2>
+        <p class="pred-label">{{ result.label }}</p>
+        <p class="pred-confidence">Confidence: {{ result.confidence }}%</p>
+      </section>
+
+      <section class="card breakdown-card">
+        <h2>Top Predictions</h2>
+        <ul>
+          {% for p in probabilities %}
+          <li>
+            <span>{{ p.label }}</span>
+            <span>{{ p.confidence }}%</span>
+          </li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+    {% endif %}
+
+    {% if qa_result %}
+      {% if qa_result.error %}
+      <section class="card error-card">
+        <h2>Q&A Error</h2>
+        <p>{{ qa_result.error }}</p>
+      </section>
+      {% else %}
+      <section class="card result-card">
+        <h2>Answer</h2>
+        {% if qa_sections %}
+        <div class="qa-structured">
+          <div class="qa-section">
+            <h3>Issue</h3>
+            <p>{{ qa_sections.issue }}</p>
+          </div>
+          <div class="qa-section">
+            <h3>Analysis</h3>
+            <p>{{ qa_sections.analysis }}</p>
+          </div>
+          <div class="qa-section">
+            <h3>Conclusion</h3>
+            <p>{{ qa_sections.conclusion }}</p>
+          </div>
+        </div>
+        {% else %}
+        <p class="qa-plain">{{ qa_result.answer }}</p>
+        {% endif %}
+      </section>
+
+      {% if qa_result.evidence %}
+      <section class="card breakdown-card">
+        <h2>Supporting Snippets</h2>
+        <ul>
+          {% for ev in qa_result.evidence %}
+          <li class="snippet-item">
+            <p>{{ ev.snippet }}</p>
+            <span>Score: {{ "%.3f"|format(ev.score) }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+      {% endif %}
+    {% endif %}
+  </main>
+</body>
+</html>
