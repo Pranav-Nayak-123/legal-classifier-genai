@@ -1,5 +1,6 @@
 import re
 from typing import Dict, List, Tuple
+from threading import Thread
 
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -9,14 +10,20 @@ _MODEL = None
 _GENERATOR = None
 _EMBEDDER = None
 _TOKENIZER = None
-_QA_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
+_QA_MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct"
+
+ROLE_INSTRUCTIONS = {
+    "law_student": "Explain clearly and educationally with legal accuracy.",
+    "paralegal": "Be practical, concise, and checklist-oriented.",
+    "counsel": "Provide professional legal analysis with risk awareness.",
+}
 
 
 def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", str(text)).strip()
 
 
-def _chunk_text(text: str, max_words: int = 140, overlap_words: int = 30) -> List[str]:
+def _chunk_text(text: str, max_words: int = 100, overlap_words: int = 20) -> List[str]:
     paragraphs = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
     if not paragraphs:
         paragraphs = [_normalize(text)]
@@ -106,16 +113,18 @@ def _get_generator():
     return model, tokenizer
 
 
-def _build_messages(question: str, evidence: List[Dict]):
+def _build_messages(question: str, evidence: List[Dict], role_template: str = "counsel"):
     context = "\n\n".join(
-        f"{item['snippet']}" for item in evidence[:3]
+        f"{item['snippet']}" for item in evidence[:2]
     )
+    role_hint = ROLE_INSTRUCTIONS.get(role_template, ROLE_INSTRUCTIONS["counsel"])
 
     return [
         {
             "role": "system",
             "content": (
                 "You are a legal reasoning assistant. "
+                f"{role_hint} "
                 "Answer in three short paragraphs: "
                 "1) identify the legal issue, "
                 "2) apply the governing legal principle to the facts, "
@@ -133,7 +142,12 @@ def _build_messages(question: str, evidence: List[Dict]):
     ]
 
 
-def answer_question(document_text: str, question: str, top_k: int = 3) -> Dict:
+def answer_question(
+    document_text: str,
+    question: str,
+    top_k: int = 2,
+    role_template: str = "counsel",
+) -> Dict:
     doc = _normalize(document_text)
     q = _normalize(question)
 
@@ -149,7 +163,7 @@ def answer_question(document_text: str, question: str, top_k: int = 3) -> Dict:
         return {"answer": UNAVAILABLE, "evidence": evidence}
 
     model, tokenizer = _get_generator()
-    messages = _build_messages(q, evidence)
+    messages = _build_messages(q, evidence, role_template=role_template)
 
     prompt = tokenizer.apply_chat_template(
         messages,
@@ -157,14 +171,20 @@ def answer_question(document_text: str, question: str, top_k: int = 3) -> Dict:
         add_generation_prompt=True,
     )
 
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    inputs = tokenizer(
+        prompt,
+        return_tensors="pt",
+        truncation=True,
+        max_length=768,
+    ).to(model.device)
 
     outputs = model.generate(
         **inputs,
-        max_new_tokens=250,
+        max_new_tokens=120,
         temperature=0.0,  # deterministic
         do_sample=False,  # no sampling
         repetition_penalty=1.2,
+        use_cache=True,
     )
 
     decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -174,3 +194,80 @@ def answer_question(document_text: str, question: str, top_k: int = 3) -> Dict:
         decoded = decoded.replace(prompt, "").strip()
 
     return {"answer": decoded.strip(), "evidence": evidence}
+
+
+def retrieve_evidence(document_text: str, question: str, top_k: int = 2) -> List[Dict]:
+    doc = _normalize(document_text)
+    q = _normalize(question)
+    if not doc or not q:
+        return []
+    chunks = _chunk_text(doc)
+    evidence, _method = _retrieve(chunks, q, top_k)
+    return evidence
+
+
+def stream_answer_question(
+    document_text: str,
+    question: str,
+    top_k: int = 2,
+    role_template: str = "counsel",
+    precomputed_evidence: List[Dict] | None = None,
+):
+    doc = _normalize(document_text)
+    q = _normalize(question)
+
+    if not doc:
+        yield "No document text available."
+        return
+    if not q:
+        yield "Please enter a question."
+        return
+
+    evidence = precomputed_evidence or retrieve_evidence(doc, q, top_k=top_k)
+    if not evidence:
+        yield UNAVAILABLE
+        return
+
+    model, tokenizer = _get_generator()
+    if model is None or tokenizer is None:
+        yield "Model is not ready."
+        return
+
+    messages = _build_messages(q, evidence, role_template=role_template)
+    prompt = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+    inputs = tokenizer(
+        prompt,
+        return_tensors="pt",
+        truncation=True,
+        max_length=768,
+    ).to(model.device)
+
+    from transformers import TextIteratorStreamer
+
+    streamer = TextIteratorStreamer(
+        tokenizer,
+        skip_special_tokens=True,
+        skip_prompt=True,
+    )
+
+    generation_kwargs = {
+        **inputs,
+        "max_new_tokens": 120,
+        "temperature": 0.0,
+        "do_sample": False,
+        "repetition_penalty": 1.2,
+        "use_cache": True,
+        "streamer": streamer,
+    }
+
+    worker = Thread(target=model.generate, kwargs=generation_kwargs)
+    worker.start()
+    for text in streamer:
+        if text:
+            yield text
+    worker.join()

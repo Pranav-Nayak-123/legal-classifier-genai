@@ -38,7 +38,14 @@
 
     <section class="card form-card">
       <h2>Ask Questions About Current Document</h2>
-      <form method="post">
+      <form method="post" id="ask-form">
+        <label for="role_template">Role Template</label>
+        <select id="role_template" name="role_template">
+          <option value="law_student" {% if role_template == 'law_student' %}selected{% endif %}>Law Student</option>
+          <option value="paralegal" {% if role_template == 'paralegal' %}selected{% endif %}>Paralegal</option>
+          <option value="counsel" {% if role_template == 'counsel' %}selected{% endif %}>Counsel</option>
+        </select>
+
         <label for="question_text">Question</label>
         <textarea
           id="question_text"
@@ -46,9 +53,41 @@
           rows="3"
           placeholder="Example: What are the termination conditions?"
         >{{ question_text }}</textarea>
-        <button type="submit" name="action" value="ask">Ask Question</button>
+        <button type="submit" name="action" value="ask" id="ask-btn">Ask Question</button>
       </form>
     </section>
+
+    <section class="card result-card" id="live-answer-card" style="display:none;">
+      <h2>Live Answer</h2>
+      <p class="qa-plain" id="live-answer-text"></p>
+    </section>
+
+    <section class="card breakdown-card" id="live-citations-card" style="display:none;">
+      <h2>Citations</h2>
+      <ul id="live-citations-list"></ul>
+    </section>
+
+    {% if summary %}
+    <section class="card result-card">
+      <h2>Document Summary</h2>
+      <p><strong>Type:</strong> {{ summary.document_type }}</p>
+      <p><strong>Risk Level:</strong> {{ summary.risk_level }}</p>
+      <p><strong>Next Action:</strong> {{ summary.next_action }}</p>
+      <p><strong>Key Issues:</strong> {{ summary.key_issues|join(", ") }}</p>
+    </section>
+
+    <section class="card breakdown-card">
+      <h2>Clause Extractor</h2>
+      <ul>
+        {% for c in summary.clauses %}
+        <li class="snippet-item">
+          <p><strong>{{ c.name }}:</strong> {% if c.found %}Found{% else %}Missing{% endif %}</p>
+          {% if c.snippet %}<span>{{ c.snippet }}</span>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
 
     {% if load_error %}
     <section class="card error-card">
@@ -131,6 +170,88 @@
       {% endif %}
       {% endif %}
     {% endif %}
+
+    <section class="card form-card">
+      <form method="post">
+        <button type="submit" name="action" value="save_workspace">Save Workspace</button>
+        <a href="/export_report" class="btn-link">Export Report PDF</a>
+      </form>
+    </section>
   </main>
+  <script>
+    (function () {
+      const askForm = document.getElementById("ask-form");
+      if (!askForm) return;
+
+      const askBtn = document.getElementById("ask-btn");
+      const questionBox = document.getElementById("question_text");
+      const liveCard = document.getElementById("live-answer-card");
+      const liveText = document.getElementById("live-answer-text");
+      const roleTemplate = document.getElementById("role_template");
+      const liveCitationsCard = document.getElementById("live-citations-card");
+      const liveCitationsList = document.getElementById("live-citations-list");
+
+      askForm.addEventListener("submit", async function (event) {
+        event.preventDefault();
+        const question = (questionBox.value || "").trim();
+        if (!question) return;
+
+        askBtn.disabled = true;
+        liveCard.style.display = "block";
+        liveCitationsCard.style.display = "none";
+        liveCitationsList.innerHTML = "";
+        liveText.textContent = "Thinking...";
+
+        try {
+          const response = await fetch("/ask_stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question_text: question, role_template: roleTemplate.value })
+          });
+
+          if (!response.ok) {
+            const err = await response.text();
+            liveText.textContent = err || "Failed to stream response.";
+            return;
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let output = "";
+          let carry = "";
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            carry += decoder.decode(value, { stream: true });
+            const lines = carry.split("\n");
+            carry = lines.pop() || "";
+
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              const event = JSON.parse(line);
+              if (event.type === "meta" && event.evidence) {
+                liveCitationsCard.style.display = "block";
+                liveCitationsList.innerHTML = "";
+                event.evidence.forEach((ev) => {
+                  const li = document.createElement("li");
+                  li.className = "snippet-item";
+                  li.innerHTML = `<p>${ev.snippet}</p><span>Score: ${Number(ev.score).toFixed(3)}</span>`;
+                  liveCitationsList.appendChild(li);
+                });
+              } else if (event.type === "token") {
+                output += event.text;
+                liveText.textContent = output;
+              }
+            }
+          }
+        } catch (err) {
+          liveText.textContent = "Streaming failed. Please try again.";
+        } finally {
+          askBtn.disabled = false;
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
