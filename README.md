@@ -22,15 +22,6 @@ An end-to-end legal AI application for:
   - Risk level + next action
 - Exportable PDF report and workspace JSON snapshots
 
-## Demo Screenshots
-
-Add your screenshots under `docs/screenshots/` and update these links:
-
-- App Home and Classifier UI: `docs/screenshots/home.png`
-- Live Chatbot Streaming: `docs/screenshots/chat_stream.png`
-- Clause Extractor + Risk Panel: `docs/screenshots/clauses_risk.png`
-- PDF Report Export: `docs/screenshots/report_export.png`
-
 ## Tech Stack
 
 - Python
