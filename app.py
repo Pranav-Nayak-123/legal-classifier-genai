@@ -20,6 +20,7 @@ last_uploaded_filename = ""
 last_prediction = {}
 last_summary = {}
 last_qa = {}
+qa_history = []
 last_role = "counsel"
 
 try:
@@ -58,7 +59,7 @@ def _parse_qa_sections(answer_text: str):
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    global last_document_text, last_uploaded_filename, last_prediction, last_summary, last_qa, last_role
+    global last_document_text, last_uploaded_filename, last_prediction, last_summary, last_qa, qa_history, last_role
 
     result = None
     probabilities = []
@@ -92,6 +93,8 @@ def index():
             else:
                 last_document_text = input_text
                 last_uploaded_filename = uploaded_filename
+                qa_history = []
+                last_qa = {}
                 label, confidence, predictions = predictor.predict(input_text)
                 result = {"label": label, "confidence": round(confidence * 100, 2)}
                 probabilities = [
@@ -110,6 +113,7 @@ def index():
                     question_text,
                     top_k=2,
                     role_template=role_template,
+                    history=qa_history,
                 )
                 if not qa_result.get("error"):
                     qa_sections = _parse_qa_sections(qa_result.get("answer", ""))
@@ -119,6 +123,8 @@ def index():
                         "evidence": qa_result.get("evidence", []),
                         "role_template": role_template,
                     }
+                    qa_history.append({"question": question_text, "answer": qa_result.get("answer", "")})
+                    qa_history = qa_history[-10:]
             input_text = last_document_text
         elif action == "save_workspace":
             payload = {
@@ -128,6 +134,7 @@ def index():
                 "prediction": last_prediction,
                 "summary": last_summary,
                 "qa": last_qa,
+                "qa_history": qa_history,
             }
             out = save_workspace(payload)
             qa_result = {"answer": f"Workspace saved to {out}"}
@@ -155,7 +162,7 @@ def index():
 
 @app.route("/ask_stream", methods=["POST"])
 def ask_stream():
-    global last_document_text, last_qa, last_role
+    global last_document_text, last_qa, qa_history, last_role
 
     payload = request.get_json(silent=True) or {}
     question_text = str(payload.get("question_text", "")).strip()
@@ -177,6 +184,7 @@ def ask_stream():
             top_k=2,
             role_template=role_template,
             precomputed_evidence=evidence,
+            history=qa_history,
         ):
             parts.append(chunk)
             yield json.dumps({"type": "token", "text": chunk}) + "\n"
@@ -187,6 +195,9 @@ def ask_stream():
             "evidence": evidence,
             "role_template": role_template,
         }
+        qa_history.append({"question": question_text, "answer": answer_text})
+        while len(qa_history) > 10:
+            qa_history.pop(0)
         yield json.dumps({"type": "done"}) + "\n"
 
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
@@ -242,6 +253,11 @@ def export_report():
         line(f"  Role Template: {last_qa.get('role_template', '')}")
         line("  Answer:")
         line("  " + str(last_qa.get("answer", "")))
+    if qa_history:
+        line("")
+        line("Conversation Turns:")
+        for i, turn in enumerate(qa_history[-5:], start=1):
+            line(f"  {i}. Q: {turn.get('question', '')}")
 
     c.save()
     buffer.seek(0)

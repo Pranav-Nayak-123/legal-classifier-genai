@@ -113,13 +113,18 @@ def _get_generator():
     return model, tokenizer
 
 
-def _build_messages(question: str, evidence: List[Dict], role_template: str = "counsel"):
+def _build_messages(
+    question: str,
+    evidence: List[Dict],
+    role_template: str = "counsel",
+    history: List[Dict] | None = None,
+):
     context = "\n\n".join(
         f"{item['snippet']}" for item in evidence[:2]
     )
     role_hint = ROLE_INSTRUCTIONS.get(role_template, ROLE_INSTRUCTIONS["counsel"])
 
-    return [
+    messages = [
         {
             "role": "system",
             "content": (
@@ -141,12 +146,27 @@ def _build_messages(question: str, evidence: List[Dict], role_template: str = "c
         },
     ]
 
+    # Add short rolling memory from prior turns.
+    if history:
+        history_tail = history[-4:]
+        memory_blocks = []
+        for turn in history_tail:
+            q_prev = str(turn.get("question", "")).strip()
+            a_prev = str(turn.get("answer", "")).strip()
+            if q_prev and a_prev:
+                memory_blocks.append(f"Q: {q_prev}\nA: {a_prev}")
+        if memory_blocks:
+            messages[1]["content"] += "\n\nRecent conversation:\n" + "\n\n".join(memory_blocks)
+
+    return messages
+
 
 def answer_question(
     document_text: str,
     question: str,
     top_k: int = 2,
     role_template: str = "counsel",
+    history: List[Dict] | None = None,
 ) -> Dict:
     doc = _normalize(document_text)
     q = _normalize(question)
@@ -163,7 +183,7 @@ def answer_question(
         return {"answer": UNAVAILABLE, "evidence": evidence}
 
     model, tokenizer = _get_generator()
-    messages = _build_messages(q, evidence, role_template=role_template)
+    messages = _build_messages(q, evidence, role_template=role_template, history=history)
 
     prompt = tokenizer.apply_chat_template(
         messages,
@@ -212,6 +232,7 @@ def stream_answer_question(
     top_k: int = 2,
     role_template: str = "counsel",
     precomputed_evidence: List[Dict] | None = None,
+    history: List[Dict] | None = None,
 ):
     doc = _normalize(document_text)
     q = _normalize(question)
@@ -233,7 +254,7 @@ def stream_answer_question(
         yield "Model is not ready."
         return
 
-    messages = _build_messages(q, evidence, role_template=role_template)
+    messages = _build_messages(q, evidence, role_template=role_template, history=history)
     prompt = tokenizer.apply_chat_template(
         messages,
         tokenize=False,
